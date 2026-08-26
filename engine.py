@@ -34,9 +34,13 @@ except ImportError:
 
 try:
     from PIL import Image
-    import numpy as np
 except ImportError:
     Image = None  # signature-image feature disabled with a clear message
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # ----------------------------------------------------------------------------
 # ENGINE
@@ -286,9 +290,10 @@ def prepare_signature_image(path, remove_white=True, thresh=225):
     """Load a signature image, optionally knock out its white background, and
     trim to the ink bounding box. Returns (png_bytes, (w, h)).
     Raises ValueError with a clear message on any problem."""
-    if Image is None:
-        raise ValueError("Signature-image support needs the Pillow library.\n"
-                         "Install it with:  python -m pip install Pillow")
+    if Image is None or np is None:
+        missing = "Pillow" if Image is None else "numpy"
+        raise ValueError(f"Signature-image support needs the {missing} "
+                         f"library on the server.")
     import io
     try:
         im = Image.open(path).convert("RGBA")
@@ -848,5 +853,3 @@ def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
     if lh_doc is not None:
         lh_doc.close()
     return written
-
-
