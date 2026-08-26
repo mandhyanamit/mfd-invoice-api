@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: mfd-invoice-api
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: ALLOWED_ORIGINS
+        # Set this to your Hostinger site's URL(s) after deploying, e.g.
+        # https://yourdomain.com,https://www.yourdomain.com
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.4"
