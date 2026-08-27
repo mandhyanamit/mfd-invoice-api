@@ -12,8 +12,8 @@ order of AMC name across all uploaded files.
   filename prefixed with the assigned serial.
 - Only the invoice number is changed. Everything else is untouched.
 
-Requires: PyMuPDF  (pip install PyMuPDF)
-GUI:      tkinter  (bundled with standard Python on Windows)
+Requires: pip install PyMuPDF openpyxl Pillow numpy
+          (tkinter is bundled with standard Python on Windows)
 
 Build .exe:
     pip install pyinstaller
@@ -83,6 +83,7 @@ class Invoice:
     taxable: float = None
     igst: float = None
     total_value: float = None
+    pdf_name: str = ""     # output PDF filename assigned during writing
 
 
 @dataclass
@@ -293,7 +294,8 @@ def prepare_signature_image(path, remove_white=True, thresh=225):
     if Image is None or np is None:
         missing = "Pillow" if Image is None else "numpy"
         raise ValueError(f"Signature-image support needs the {missing} "
-                         f"library on the server.")
+                         f"library.\nInstall it with:  python -m pip install "
+                         f"{missing}")
     import io
     try:
         im = Image.open(path).convert("RGBA")
@@ -458,7 +460,8 @@ def write_register_xlsx(invoices, path):
     from openpyxl.utils import get_column_letter
 
     headers = ["INVOICE DATE", "INVOICE NUMBER", "NAME OF THE MUTUAL FUND",
-               "GSTIN", "TOTAL INVOICE VALUE", "TAXABLE VALUE", "IGST AMOUNT"]
+               "GSTIN", "TOTAL INVOICE VALUE", "TAXABLE VALUE", "IGST AMOUNT",
+               "PDF FILE NAME"]
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice Register"
@@ -478,11 +481,11 @@ def write_register_xlsx(invoices, path):
     sum_total = sum_tax = sum_igst = 0.0
     for r, inv in enumerate(invoices, start=2):
         row = [inv.date, inv.new_number, inv.amc, inv.gstin,
-               inv.total_value, inv.taxable, inv.igst]
+               inv.total_value, inv.taxable, inv.igst, inv.pdf_name]
         for c, val in enumerate(row, 1):
             cell = ws.cell(row=r, column=c, value=val)
             cell.border = border
-            if c >= 5:
+            if c in (5, 6, 7):
                 cell.number_format = money
                 cell.alignment = Alignment(horizontal="right")
                 if val is None:
@@ -501,7 +504,7 @@ def write_register_xlsx(invoices, path):
         cell.alignment = Alignment(horizontal="right")
         cell.border = Border(top=Side(style="double"))
 
-    widths = [15, 20, 34, 20, 20, 18, 16]
+    widths = [15, 20, 34, 20, 20, 18, 16, 22]
     for c, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.freeze_panes = "A2"
@@ -745,10 +748,13 @@ def convert_register_to_gstr1(xlsx_path, out_path, supplier_gstin,
 
 
 def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
-            sig_width_mm=32, sig_remove_white=True, merge=False, fmt="",
+            sig_width_mm=32, sig_remove_white=True, fmt="",
             pad=3, letterhead="", write_excel=False, write_gstr1=False,
             gstr1_period="", log=print):
     """Write renumbered PDFs. Returns list of output file paths.
+
+    Each invoice is written as its own PDF, named by the AMC's first word
+    (Aditya.pdf, Bandhan.pdf ...; a colliding first word gets _2, _3 ...).
 
     sig_above / sig_below : text printed above / below the signature image in
                   the (always cleared) signature area. Both empty -> blank.
@@ -756,10 +762,8 @@ def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
                   the above and below text.
     sig_width_mm  : printed width of the signature image, in millimetres.
     sig_remove_white : knock out the image's white background (for raw scans).
-    merge       : True  -> one combined PDF, all invoices in serial order;
-                           filename derived from `fmt` and the serial range.
-    fmt, pad    : the invoice number format/padding (used for the merged
-                  filename and the Excel filename).
+    fmt, pad    : the invoice number format/padding (used for the register and
+                  GSTR-1 filenames).
     letterhead  : optional path to a letterhead PDF; every output page is
                   rebuilt on it, invoice scaled into its clear body zone.
                   Raises ValueError before writing anything if unusable.
@@ -798,36 +802,24 @@ def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
                                  sig_width_mm=sig_width_mm)
         docs[sf.path] = doc
 
-    # Pass 2: write outputs
-    if merge:
-        all_inv = sorted((inv for sf in sources for inv in sf.invoices),
-                         key=lambda i: i.serial)
-        lo, hi = all_inv[0].serial, all_inv[-1].serial
-        out = os.path.join(out_dir,
-                           merged_filename(fmt, lo, hi, pad) if fmt
-                           else f"Invoices_{lo:03d}-{hi:03d}.pdf")
-        _emit([(docs[inv.src_path], inv) for inv in all_inv], out,
-              lh_doc, body)
+    # Pass 2: write outputs — one file per invoice, named by the AMC's first
+    # word. The assigned filename is recorded on each invoice so the register
+    # can list it.
+    all_inv = sorted((inv for sf in sources for inv in sf.invoices),
+                     key=lambda i: i.serial)
+    used = {}
+    for inv in all_inv:
+        first_word = safe_name(inv.amc.split()[0]) or "Invoice"
+        n = used.get(first_word.lower(), 0) + 1
+        used[first_word.lower()] = n
+        name = first_word if n == 1 else f"{first_word}_{n}"
+        inv.pdf_name = f"{name}.pdf"
+        out = os.path.join(out_dir, inv.pdf_name)
+        _emit([(docs[inv.src_path], inv)], out, lh_doc, body)
         written.append(out)
-        log(f"  written: {os.path.basename(out)}")
-    else:
-        # One file per invoice, named by the first word of the AMC name.
-        all_inv = sorted((inv for sf in sources for inv in sf.invoices),
-                         key=lambda i: i.serial)
-        used = {}
-        for inv in all_inv:
-            first_word = safe_name(inv.amc.split()[0]) or "Invoice"
-            n = used.get(first_word.lower(), 0) + 1
-            used[first_word.lower()] = n
-            name = first_word if n == 1 else f"{first_word}_{n}"
-            out = os.path.join(out_dir, f"{name}.pdf")
-            _emit([(docs[inv.src_path], inv)], out, lh_doc, body)
-            written.append(out)
-            log(f"  written: {os.path.basename(out)}")
+        log(f"  written: {inv.pdf_name}")
 
     if write_excel:
-        all_inv = sorted((inv for sf in sources for inv in sf.invoices),
-                         key=lambda i: i.serial)
         lo, hi = all_inv[0].serial, all_inv[-1].serial
         xlsx_name = (merged_filename(fmt, lo, hi, pad)[:-4] if fmt
                      else f"Invoices_{lo:03d}-{hi:03d}") + ".xlsx"
@@ -837,8 +829,6 @@ def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
         log(f"  written: {os.path.basename(xlsx_path)}")
 
     if write_gstr1:
-        all_inv = sorted((inv for sf in sources for inv in sf.invoices),
-                         key=lambda i: i.serial)
         lo, hi = all_inv[0].serial, all_inv[-1].serial
         period = gstr1_period or detect_filing_period(all_inv)
         stem = (merged_filename(fmt, lo, hi, pad)[:-4] if fmt
@@ -853,3 +843,6 @@ def process(sources, out_dir, sig_above="", sig_below="", sig_image="",
     if lh_doc is not None:
         lh_doc.close()
     return written
+
+
+# ----------------------------------------------------------------------------

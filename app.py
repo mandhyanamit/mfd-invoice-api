@@ -85,7 +85,6 @@ def process_invoices(
     fmt: str = Form(...),
     start: int = Form(...),
     pad: int = Form(3),
-    merge: bool = Form(False),
     sig_above: str = Form(""),
     sig_below: str = Form(""),
     sig_width_mm: float = Form(32),
@@ -94,8 +93,8 @@ def process_invoices(
     letterhead: UploadFile | None = File(None),
     signature: UploadFile | None = File(None),
 ):
-    """Renumber + (optional) signature/letterhead/merge/register. Returns a
-    zip of all outputs."""
+    """Renumber + (optional) signature/letterhead/register. Each invoice is
+    written as its own PDF named by the AMC's first word. Returns a zip."""
     if "{n}" not in fmt:
         raise HTTPException(400, "Format must contain {n} (e.g. FFI/26-27/{n}).")
 
@@ -129,7 +128,7 @@ def process_invoices(
                 sig_above=sig_above, sig_below=sig_below,
                 sig_image=sig_path, sig_width_mm=sig_width_mm,
                 sig_remove_white=sig_remove_white,
-                merge=merge, fmt=fmt, pad=pad,
+                fmt=fmt, pad=pad,
                 letterhead=lh_path, write_excel=make_register,
                 write_gstr1=False, log=lambda s: None)
         except ValueError as e:
